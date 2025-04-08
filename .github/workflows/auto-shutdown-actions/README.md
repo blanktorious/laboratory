@@ -1,10 +1,10 @@
-### Autoshutdown System for Azure Resources
+# Autoshutdown System for Azure Resources
 
-# Purpose
+### Purpose
 This system is created to automatically shutdown resources any time when you want to set it. It's purpose is to turn off the development resources in azure to not incur cost when it is not used. It shutdowns AKS, PSQL servers and VMs. It also have its manual action that you have the option to shutdown or start a specific resource in a specific environment.
 
-# Configuration
+### Configuration
 The whole system refers to environment variables configured in a repository. This is to dynamically facilitate resources and enable reusability.
 
-# Example
+### Example
 An example schenario for this is it automatically shutdowns non-production systems every weekend when no user is working or using the resources. If ever, someone needs it there is a manual option to turn on the resources in github actions. Mitigating the action to turn it manually using CLI or in Azure portal.
