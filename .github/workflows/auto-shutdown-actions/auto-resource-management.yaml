@@ -1,0 +1,70 @@
+name: Auto Resource Management
+run-name: >
+  ${{ contains(github.event.schedule, '55 21 * * 0') && 'Automatically Starting All Resources in All Environment' || 'Automatically Stopping All Resources in All Environment' }}
+
+on:
+  schedule:
+    #Schedule is adjusted 5 mins earlier because of github action's delay
+    - cron: "55 2 * * 6"  # Stop environments every Saturday 11:00 PHT | Friday 22:00 Colombian Time | Saturday 00:00 Chilean Time
+    - cron: "55 21 * * 0"  # Start environments every Monday 6:00 PHT | Sunday 17:00 Colombian Time |  Sunday 19:00 Chilean Time
+
+jobs:
+  stop-test-env:
+    name: Stop Test Environment
+    if: ${{ github.event.schedule == '55 2 * * 6' }}
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Stop
+      environment: test
+      resource: All
+    secrets: inherit
+
+  start-test-env:
+    name: Start Test Environment
+    if: ${{ github.event.schedule == '55 21 * * 0' }}
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Start
+      environment: test
+      resource: All
+    secrets: inherit
+
+  stop-old-dev-env:
+    name: Stop Old Dev Environment
+    if: ${{ github.event.schedule == '55 2 * * 6' }}
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Stop
+      environment: old-development
+      resource: All
+    secrets: inherit
+
+  start-old-dev-env:
+    name: Start Old Dev Environment
+    if: ${{ github.event.schedule == '55 21 * * 0' }}
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Start
+      environment: old-development
+      resource: All
+    secrets: inherit
+
+  stop-new-dev-env:
+    name: Stop New Dev Environment
+    if: ${{ github.event.schedule == '55 2 * * 6' }} 
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Stop
+      environment: new-development
+      resource: All
+    secrets: inherit
+
+  start-new-dev-env:
+    name: Start New Dev Environment
+    if: ${{ github.event.schedule == '55 21 * * 0' }}
+    uses: <file-path>/resource-management-auto.yaml@feature/start-stop-envs
+    with:
+      action: Start
+      environment: new-development
+      resource: All
+    secrets: inherit

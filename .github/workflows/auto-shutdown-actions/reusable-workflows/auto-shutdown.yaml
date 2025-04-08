@@ -1,0 +1,237 @@
+name: Resource Management
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      resource:
+        required: true
+        type: string
+
+jobs:
+  automation-check:
+    name: Validate Automation for ${{ inputs.environment }}
+    runs-on:
+      group: <self-hosted-runner>
+    environment: ${{ inputs.environment }}
+    outputs:
+      automation_enabled: ${{ steps.automation.outputs.enabled }}
+    steps:
+      - name: Retrieve Automation Status
+        id: automation
+        run: |
+          AUTOMATION="${{ vars.AUTOMATION }}"
+          if [[ "$AUTOMATION" == "ON" ]]; then
+            echo -e "\033[0;32m[INFO] Automation is ENABLED for ${{ inputs.environment }}. Proceeding with automatic start/stop.\033[0m"
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo -e "\033[0;31m[WARNING] Automation is DISABLED for ${{ inputs.environment }}. Skipping automatic start/stop.\033[0m"
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+  resource-check:
+    name: Resource Check
+    needs: automation-check
+    if: ${{ needs.automation-check.outputs.automation_enabled == 'true' }}
+    runs-on:
+      group: <self-hosted-runner>
+    environment: ${{ inputs.environment }}
+    outputs:
+      aks_available: ${{ steps.aks_check.outputs.available }}
+      psql_available: ${{ steps.psql_check.outputs.available }}
+      vm_available: ${{ steps.vm_check.outputs.available }}
+    steps:
+      - name: Check AKS
+        id: aks_check
+        run: |
+          if [ -z "${{ vars.AZURE_AKS_NAME }}" ]; then
+            echo -e "\033[0;33mAKS is not configured.\033[0m"
+            echo "available=false" >> $GITHUB_OUTPUT
+          else
+            echo -e "\033[0;32mAKS is configured.\033[0m"
+            echo "available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check PSQL
+        id: psql_check
+        run: |
+          if [ -z "${{ vars.AZURE_PSQL_SERVER_NAME }}" ]; then
+            echo -e "\033[0;33mPSQL is not configured.\033[0m"
+            echo "available=false" >> $GITHUB_OUTPUT
+          else
+            echo -e "\033[0;32mPSQL is configured.\033[0m"
+            echo "available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check VM
+        id: vm_check
+        run: |
+          if [ -z "${{ vars.AZURE_VM_NAME }}" ]; then
+            echo -e "\033[0;33mVM is not configured.\033[0m"
+            echo "available=false" >> $GITHUB_OUTPUT
+          else
+            echo -e "\033[0;32mVM is configured.\033[0m"
+            echo "available=true" >> $GITHUB_OUTPUT
+          fi
+
+  AKS: 
+    name: AKS
+    needs: resource-check
+    if: ${{ needs.resource-check.outputs.aks_available == 'true' && (inputs.resource == 'AKS' || inputs.resource == 'All') }}
+    runs-on:
+      group: <self-hosted-runner>
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az login --service-principal --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo -e "\033[0;32mLogged in successfuly.\033[0m"
+      
+      - name: Start AKS
+        if: ${{ inputs.action == 'Start' }}
+        run: |
+          IFS=',' read -ra AKS_NAMES <<< "${{ vars.AZURE_AKS_NAME }}"
+          IFS=',' read -ra AKS_RESOURCE_GROUPS <<< "${{ vars.AZURE_AKS_RG_NAME }}"
+      
+          for i in "${!AKS_NAMES[@]}"; do
+            AKS_NAME=${AKS_NAMES[$i]}
+            AKS_RG_NAME=${AKS_RESOURCE_GROUPS[$i]}
+              echo -e "\033[0;33mStarting $AKS_NAMES in $AKS_RG_NAME.\033[0m"
+              az aks start --name $AKS_NAMES --resource-group $AKS_RG_NAME
+              echo -e "\033[0;32mAKS $AKS_NAMES started in $AKS_RG_NAME.\033[0m"
+
+              NODEPOOL_NAMES=$(az aks nodepool list --cluster-name $AKS_NAMES --resource-group $AKS_RG_NAME --query "[?mode=='User'].name" -o tsv)
+
+              if [ -z "$NODEPOOL_NAMES" ]; then
+                echo "No user node pools found in the cluster. Skipping auto-scaler adjustment."
+              else
+                echo "NODEPOOL_NAMES<<EOF" >> $GITHUB_ENV
+                echo "$NODEPOOL_NAMES" >> $GITHUB_ENV
+                echo "EOF" >> $GITHUB_ENV
+                for NODEPOOL in $NODEPOOL_NAMES; do
+                  echo -e "\033[0;33mEnabling Autos-scaler for node pool: $NODEPOOL\033[0m"
+                  az aks nodepool update --name $NODEPOOL --cluster-name $AKS_NAMES --resource-group $AKS_RG_NAME --enable-cluster-autoscaler --min-count 1 --max-count 11
+                  echo -e "\033[0;32mAuto-scaler enabled for node pool: $NODEPOOL.\033[0m"
+                done
+              fi
+          done
+      
+      - name: Stop AKS
+        if: ${{ inputs.action == 'Stop' }}
+        run: |
+          IFS=',' read -ra AKS_NAMES <<< "${{ vars.AZURE_AKS_NAME }}"
+          IFS=',' read -ra AKS_RESOURCE_GROUPS <<< "${{ vars.AZURE_AKS_RG_NAME }}"
+      
+          for i in "${!AKS_NAMES[@]}"; do
+            AKS_NAME=${AKS_NAMES[$i]}
+            AKS_RG_NAME=${AKS_RESOURCE_GROUPS[$i]}
+              NODEPOOL_NAMES=$(az aks nodepool list --cluster-name $AKS_NAMES --resource-group $AKS_RG_NAME --query "[?mode=='User'].name" -o tsv)
+
+              if [ -z "$NODEPOOL_NAMES" ]; then
+                echo "No user node pools found in the cluster. Skipping auto-scaler adjustment."
+              else
+                echo "NODEPOOL_NAMES<<EOF" >> $GITHUB_ENV
+                echo "$NODEPOOL_NAMES" >> $GITHUB_ENV
+                echo "EOF" >> $GITHUB_ENV
+                for NODEPOOL in $NODEPOOL_NAMES; do
+                  echo -e "\033[0;33mDisabling Autos-scaler for node pool: $NODEPOOL\033[0m"
+                  az aks nodepool update --name $NODEPOOL --cluster-name $AKS_NAMES --resource-group $AKS_RG_NAME --disable-cluster-autoscaler
+                  echo -e "\033[0;32mAuto-scaler disabled for node pool: $NODEPOOL.\033[0m"
+                done
+              fi
+
+              echo -e "\033[0;33mStopping $AKS_NAMES in $AKS_RG_NAME\033[0m"
+              az aks stop --name $AKS_NAMES --resource-group $AKS_RG_NAME
+              echo -e "\033[0;32mAKS $AKS_NAMES stopped in $AKS_RG_NAME\033[0m"
+          done
+
+  PSQL:
+    name: PSQL
+    needs: resource-check
+    if: ${{ needs.resource-check.outputs.psql_available == 'true' && (inputs.resource == 'PSQL' || inputs.resource == 'All') }}
+    runs-on:
+      group: <self-hosted-runner>
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az login --service-principal --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo -e "\033[0;32mLogged in successfuly.\033[0m"
+      
+      - name: Start PostgreSQL
+        if: ${{ inputs.action == 'Start' }}
+        run: |
+          IFS=',' read -ra PSQL_NAMES <<< "${{ vars.AZURE_PSQL_SERVER_NAME }}"
+          IFS=',' read -ra PSQL_RESOURCE_GROUPS <<< "${{ vars.AZURE_PSQL_RG_NAME }}"
+      
+          for i in "${!PSQL_NAMES[@]}"; do
+            PSQL_NAME=${PSQL_NAMES[$i]}
+            PSQL_RG_NAME=${PSQL_RESOURCE_GROUPS[$i]}
+              echo -e "\033[0;33mStarting $PSQL_NAME in $PSQL_RG_NAME.\033[0m"
+              az postgres flexible-server start --name $PSQL_NAME --resource-group $PSQL_RG_NAME
+              echo -e "\033[0;32mPostgreSQL $PSQL_NAME started in $PSQL_RG_NAME.\033[0m"
+          done
+      
+      - name: Stop PostgreSQL
+        if: ${{ inputs.action == 'Stop' }}
+        run: |
+          IFS=',' read -ra PSQL_NAMES <<< "${{ vars.AZURE_PSQL_SERVER_NAME }}"
+          IFS=',' read -ra PSQL_RESOURCE_GROUPS <<< "${{ vars.AZURE_PSQL_RG_NAME }}"
+      
+          for i in "${!PSQL_NAMES[@]}"; do
+            PSQL_NAME=${PSQL_NAMES[$i]}
+            PSQL_RG_NAME=${PSQL_RESOURCE_GROUPS[$i]}
+              echo -e "\033[0;33mStopping $PSQL_NAME in $PSQL_RG_NAME.\033[0m"
+              az postgres flexible-server stop --name $PSQL_NAME --resource-group $PSQL_RG_NAME
+              echo -e "\033[0;32mPostgreSQL $PSQL_NAME stopped in $PSQL_RG_NAME.\033[0m"
+          done
+
+  VM:
+    name: VM
+    needs: resource-check
+    if: ${{ needs.resource-check.outputs.vm_available == 'true' && (inputs.resource == 'VM' || inputs.resource == 'All') }}
+    runs-on:
+      group: <self-hosted-runner>
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Setup Azure CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+          az login --service-principal --username ${{ secrets.AZURE_CLIENT_ID }} --password ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          echo -e "\033[0;32mLogged in successfuly.\033[0m"
+      - name: Start VM
+        if: ${{ inputs.action == 'Start' }}
+        run: |
+          IFS=',' read -ra VM_NAMES <<< "${{ vars.AZURE_VM_NAME }}"
+          IFS=',' read -ra VM_RESOURCE_GROUPS <<< "${{ vars.AZURE_VM_RG_NAME }}"
+      
+          for i in "${!VM_NAMES[@]}"; do
+            VM_NAME=${VM_NAMES[$i]}
+            VM_RG_NAME=${VM_RESOURCE_GROUPS[$i]}
+              echo -e "\033[0;33mStarting $VM_NAME in $VM_RG_NAME.\033[0m"
+              az vm start --name $VM_NAME --resource-group $VM_RG_NAME
+              echo -e "\033[0;32mStarted VM: $VM_NAME in $VM_RG_NAME.\033[0m"
+          done
+      - name: Stop VM
+        if: ${{ inputs.action == 'Stop' }}
+        run: |
+          IFS=',' read -ra VM_NAMES <<< "${{ vars.AZURE_VM_NAME }}"
+          IFS=',' read -ra VM_RESOURCE_GROUPS <<< "${{ vars.AZURE_VM_RG_NAME }}"
+      
+          for i in "${!VM_NAMES[@]}"; do
+            VM_NAME=${VM_NAMES[$i]}
+            VM_RG_NAME=${VM_RESOURCE_GROUPS[$i]}
+              echo -e "\033[0;33mStopping $VM_NAME in $VM_RG_NAME.\033[0m"
+              az vm deallocate --name $VM_NAME --resource-group $VM_RG_NAME
+              echo -e "\033[0;33mStopped VM: $VM_NAME in $VM_RG_NAME.\033[0m"
+          done

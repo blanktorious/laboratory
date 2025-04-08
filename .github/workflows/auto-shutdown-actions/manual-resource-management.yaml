@@ -1,0 +1,64 @@
+name: Manual Resource Management
+run-name: >-
+  ${{ inputs.action == 'start' && 'Starting' || 'Stopping' }} ${{ inputs.resource }} resource | Environment: ${{ inputs.environment }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - Start
+          - Stop
+      environment:
+        description: 'Environment to target'
+        required: true
+        type: choice
+        options:
+          - Test
+          - Old-Dev
+          - New-Dev
+          - All
+      resource:
+        description: Resource to target
+        required: true
+        type: choice
+        options:
+          - AKS
+          - VM
+          - PSQL
+          - All
+
+jobs:
+
+  test-env:
+    name: Manage Test Environment
+    if: ${{ (inputs.environment == 'Test' || inputs.environment == 'All') && (inputs.resource == 'AKS' || inputs.resource == 'PSQL' || inputs.resource == 'VM' || inputs.resource == 'All')  }}
+    uses: <file-path>/resource-management-manual.yaml@feature/start-stop-envs
+    with:
+      action: ${{ inputs.action }}
+      environment: test
+      resource: ${{ inputs.resource }}
+    secrets: inherit
+
+  old-dev-env:
+    name: Manage Old-Dev Environment
+    if: ${{ (inputs.environment == 'Old-Dev' || inputs.environment == 'All') && (inputs.resource == 'AKS' || inputs.resource == 'PSQL' || inputs.resource == 'VM' || inputs.resource == 'All')  }}
+    uses: <file-path>/resource-management-manual.yaml@feature/start-stop-envs
+    with:
+      action: ${{ inputs.action }}
+      environment: old-development
+      resource: ${{ inputs.resource }}
+    secrets: inherit
+
+  new-dev-env:
+    name: Manage New-Dev Environment
+    if: ${{ (inputs.environment == 'New-Dev' || inputs.environment == 'All') && (inputs.resource == 'AKS' || inputs.resource == 'PSQL' || inputs.resource == 'VM' || inputs.resource == 'All')  }}
+    uses: <file-path>/resource-management-manual.yaml@feature/start-stop-envs
+    with:
+      action: ${{ inputs.action }}
+      environment: new-development
+      resource: ${{ inputs.resource }}
+    secrets: inherit
